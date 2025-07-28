@@ -37,7 +37,7 @@ The main metrics of each model will be compared, along with economic evaluation,
 
 ## Project Report
 
-You can view the full analysis here: [Palmer Penguins ETL Report](https://roberbaca.github.io/decision-trees)
+You can view the full analysis here: [Optimizing Deposit Subscription Predictions with Decision Trees and Economic Metrics](https://roberbaca.github.io/decision-trees)
 
 ## How to Run
 
