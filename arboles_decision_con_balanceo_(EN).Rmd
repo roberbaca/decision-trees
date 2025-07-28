@@ -1,0 +1,657 @@
+---
+title: "Optimizing Deposit Subscription Predictions with Decision Trees and Economic Metrics"
+author: "Roberto Baca"
+date: "25/07/2025"
+output: 
+  prettydoc::html_pretty:
+          theme: hpstr
+---
+
+## Implementation of Decision Trees in R
+
+Decision trees are like flowcharts used to predict outcomes in various fields. In machine learning, we use the CART technique (Classification And Regression Trees), a form of supervised learning where we seek a function that predicts the target variable based on predictor variables.
+
+We will use the rpart package. RPART (Recursive Partitioning and Regression Trees) is a specific implementation of CART. This algorithm finds the best split of data into groups using rules, forming nodes and leaves in a tree.
+
+### Advantages and Disadvantages
+
+Decision trees offer interpretability and computational efficiency, but can be sensitive to the data sample and prone to overfitting.
+
+### Objective of the Analysis
+
+We will use the bank dataset from the liver package, which must be installed from CRAN if not already available.
+
+The data is related to direct marketing campaigns of a Portuguese banking institution. The marketing campaigns were based on phone calls. Often, more than one contact with the same client was required to determine whether the product would be subscribed. The classification goal is to predict whether a client with a given profile will subscribe to a term deposit.
+
+Decision trees will be used to predict the target variable "deposit" in the bank dataset from the liver package. The approaches are:
+
+* Decision trees without balancing
+
+* Upsampling
+
+* Downsampling
+
+* ROSE balancing
+
+* Hybrid balancing
+
+* No balancing but with hyperparameter tuning
+
+The main metrics of each model will be compared, along with economic evaluation, to choose the model that fits best and maximizes profit.
+
+### Load dataset and required libraries
+
+```{r message= FALSE, warning= FALSE}
+library(tidyverse) 
+library(rpart.plot) 
+library(rpart) 
+library(caret) 
+
+if (!require("liver")) install.packages("liver")
+library(liver)
+
+data("bank")
+
+```
+
+```{r}
+# structure
+str(bank)
+```
+### Distribution of the Target Variable
+
+The target variable is "deposit," which is factorized.
+
+We aim to determine the number of cases in the dataset where clients were contacted and subsequently subscribed to a deposit.
+
+It is observed that the classes are highly imbalanced.
+
+```{r}
+prop.table(table(bank$deposit))
+```
+
+### Dataset Partitioning
+
+The dataset is split into training and testing sets.
+
+```{r}
+set.seed(42)
+
+n <- nrow(bank)
+train_indices <- sample(1:n, n * 0.7)
+
+bank_train <- bank[train_indices, ]
+bank_test <- bank[-train_indices, ] 
+```
+
+We examine the distribution of the target variable in both the training and testing sets.
+
+```{r}
+prop.table(table(bank_test$deposit))
+table(bank_train$deposit)
+```
+
+  There is a class imbalance, with the "NO" class representing 89% of the total.
+
+## Decision Trees
+
+### A - Decision Trees Without Balancing
+
+Apply the decision tree model to the dataset without balancing the classes:
+
+```{r}
+arboles <- rpart(formula = deposit ~ ., method = "class", data = bank_train)
+```
+
+
+```{r}
+# Visualize the tree
+library(rpart.plot)
+
+rpart.plot(arboles)
+```
+
+```{r include = FALSE}
+# Save high-resolution PNG in the "images" folder
+if (!dir.exists("images")) dir.create("images")
+
+png("images/arboles_highres.png", width = 3000, height = 2000, res = 300)
+rpart.plot(arboles, extra = 106, tweak = 1.2)
+dev.off()
+
+```
+
+### Confusion Matrix
+
+Make predictions on the test set and display the confusion matrix and metrics:
+
+```{r}
+predArbol1_train <- predict(arboles, newdata = bank_train, type = "prob")
+predArbol1_test <- predict(arboles, newdata = bank_test, type = "prob")
+```
+
+
+```{r}
+library(caret)
+
+pred_test <- ifelse(predArbol1_test[, "yes"] > 0.5, "yes", "no")
+pred_test <- factor(pred_test, levels = c("no", "yes"))
+real_test <- factor(bank_test$deposit, levels = c("no", "yes"))
+
+# Confusion matrix
+cm <- confusionMatrix(pred_test, real_test, positive = "yes")
+cm
+
+# Metrics
+acc <- cm$overall["Accuracy"]
+sensitivity  <- cm$byClass["Sensitivity"]
+specificity <- cm$byClass["Specificity"]
+
+```
+* Accuracy: shows the percentage of correct predictions.
+
+* Sensitivity (True Positive Rate): percentage of actual positives correctly identified.
+
+* Specificity: how well the model identifies true negatives.
+
+### Economic Evaluation of the Unbalanced Model
+
+We define the following costs and revenues:
+
+```{r}
+costo_contacto <- 100
+ingreso_venta <- 3000
+```
+
+
+```{r}
+cm$table
+
+TP <- cm$table["yes", "yes"]
+TN <- cm$table["no", "no"]
+FP <- cm$table["yes", "no"]
+FN <- cm$table["no", "yes"]
+
+```
+```{r}
+contactos_realizados <- TP + FP # all cases predicted as "yes"
+Resultado <- ingreso_venta * TP - costo_contacto * contactos_realizados
+
+cat("Total Profit = $", Resultado, "\n", "Contacts made =", contactos_realizados, "\n", "TP (successful sales) =", TP, "\n")
+```
+```{r echo= FALSE}
+library(knitr)
+
+result_sin_balanceo <- data.frame(
+  Modelo = "Unbalanced",
+  Ganancia_Total = Resultado,
+  Contactos_Realizados = contactos_realizados,
+  TP = TP
+)
+
+kable(result_sin_balanceo, digits = 0, caption = "Unbalanced Model Summary")
+```
+
+
+## B - Decision Trees with Upsampling
+
+Upsampling consists of randomly duplicating examples from the minority class to equalize the number of observations with the majority class.
+
+Returns a new data frame with a column named Class (new target variable).
+
+
+```{r}
+library(caret)
+
+# Check class distribution before balancing
+antes <- prop.table(table(bank_train$deposit))
+antes
+
+# Apply upsampling and verify new distribution
+bank_train_upsampled <- upSample(x = select(bank_train, -deposit), y = bank_train$deposit)
+despues <- prop.table(table(bank_train_upsampled$Class))
+despues
+
+str(bank_train_upsampled)
+```
+
+```{r}
+# Retrain the model with balanced data
+arbol_upsampled <- rpart(formula = Class ~ ., method = "class", data = bank_train_upsampled)
+
+# Predictions
+pred_test_up <- predict(arbol_upsampled, newdata = bank_test, type = "prob")
+pred_test_classes_up <- ifelse(pred_test_up[, "yes"] > 0.5, "yes", "no")
+pred_test_classes_up <- factor(pred_test_classes_up, levels = levels(bank_test$deposit))
+
+# Confusion Matrix
+cm_up <- confusionMatrix(pred_test_classes_up, bank_test$deposit, positive = "yes")
+cm_up
+
+# Metrics
+acc_up <- cm_up$overall["Accuracy"]
+sensitivity_up <- cm_up$byClass["Sensitivity"]
+specificity_up <- cm_up$byClass["Specificity"]
+```
+
+### Economic Evaluation of the Upsampled Model
+
+
+```{r}
+cm_up$table
+
+TP_upsampled  <- cm_up$table["yes", "yes"]
+TN_upsampled <- cm_up$table["no", "no"]
+FP_upsampled <- cm_up$table["yes", "no"]
+FN_upsampled <- cm_up$table["no", "yes"]
+
+```
+
+```{r}
+contactos_realizados_upsampled <- TP_upsampled + FP_upsampled # todos lso casos predichos como "yes"
+Resultado_upsampled <- ingreso_venta * TP_upsampled - costo_contacto * contactos_realizados_upsampled
+
+cat("Total Profit with Upsampling = $", Resultado_upsampled, "\n", "Contacts made =", contactos_realizados_upsampled, "\n", "TP (successful sales) =", TP_upsampled, "\n")
+```
+
+```{r echo= FALSE}
+library(knitr)
+
+result_upsampled <- data.frame(
+  Modelo = "Upsampling",
+  Ganancia_Total = Resultado_upsampled,
+  Contactos_Realizados = contactos_realizados_upsampled,
+  TP = TP_upsampled
+)
+
+kable(result_upsampled, digits = 0, caption = "Upsampling Summary")
+```
+
+
+## C - Decision Trees with Downsampling
+
+Downsampling involves randomly removing observations from the majority class to match the number of observations in the minority class.
+
+The result includes a Class column (replacing deposit as the target variable).
+
+```{r}
+library(caret)
+
+# Check distribution before downsampling
+antes <- prop.table(table(bank_train$deposit))
+antes
+
+# Apply downsampling
+bank_train_downsampled <- downSample(x = select(bank_train, -deposit), y = bank_train$deposit)
+despues <- prop.table(table(bank_train_downsampled$Class))
+despues
+```
+
+```{r}
+# Retrain with downsampled data
+arbol_downsampled <- rpart(formula = Class ~ ., method = "class", data = bank_train_downsampled)
+
+# Predictions
+pred_test_down <- predict(arbol_downsampled, newdata = bank_test, type = "prob")
+pred_test_classes_down <- ifelse(pred_test_down[, "yes"] > 0.5, "yes", "no")
+pred_test_classes_down <- factor(pred_test_classes_down, levels = levels(bank_test$deposit))
+
+# Confusion Matrix
+cm_down <- confusionMatrix(pred_test_classes_down, bank_test$deposit, positive = "yes")
+cm_down
+
+# Metrics
+acc_down <- cm_down$overall["Accuracy"]
+sensitivity_down <- cm_down$byClass["Sensitivity"]
+specificity_down <- cm_down$byClass["Specificity"]
+
+```
+
+### Economic Evaluation of the Downsampled Model
+
+
+```{r}
+cm_down$table
+
+TP_downsampled  <- cm_down$table["yes", "yes"]
+TN_downsampled <- cm_down$table["no", "no"]
+FP_downsampled <- cm_down$table["yes", "no"]
+FN_downsampled <- cm_down$table["no", "yes"]
+
+```
+
+```{r}
+contactos_realizados_downsampled <- TP_downsampled + FP_downsampled # todos lso casos predichos como "yes"
+Resultado_downsampled <- ingreso_venta * TP_downsampled - costo_contacto * contactos_realizados_downsampled
+
+cat("Total Profit with Downsampling = $", Resultado_downsampled, "\n", "Contacts made =", contactos_realizados_downsampled, "\n", "TP (successful sales) =", TP_downsampled, "\n")
+```
+```{r echo= FALSE}
+library(knitr)
+
+result_downsample <- data.frame(
+  Modelo = "Downsampling",
+  Ganancia_Total = Resultado_downsampled,
+  Contactos_Realizados = contactos_realizados_downsampled,
+  TP = TP_downsampled
+)
+
+kable(result_downsample, digits = 0, caption = "Downsampling Summary")
+```
+
+
+## D - Decision Trees with ROSE Balancing (Synthetic Data Generation)
+
+When classes are highly imbalanced (e.g., many "no" vs. few "yes"), models may struggle to learn patterns of the minority class.
+
+ROSE (Random OverSampling Examples) generates synthetic examples rather than duplicating records.
+
+
+```{r message= FALSE, warning= FALSE}
+if (!require("ROSE")) install.packages("ROSE")
+library(ROSE)
+
+mayoritarios <- sum(bank_train$deposit == "no")
+
+bank_train_rose <- ROSE(deposit ~ ., data=bank_train, N = 2 * mayoritarios, seed=123)$data
+
+table(bank_train_rose$deposit)
+
+
+```
+
+```{r}
+# Train on ROSE-balanced data
+arbol_rose <- rpart(formula = deposit ~ ., method = "class", data = bank_train_rose)
+
+# Predictions
+pred_test_rose <- predict(arbol_rose, newdata = bank_test, type = "prob")
+pred_test_classes_rose <- ifelse(pred_test_rose[, "yes"] > 0.5, "yes", "no")
+pred_test_classes_rose <- factor(pred_test_classes_rose, levels = levels(bank_test$deposit))
+
+# Confusion Matrix
+cm_rose <- confusionMatrix(pred_test_classes_rose, bank_test$deposit, positive = "yes")
+cm_rose
+
+# Metrics
+acc_rose <- cm_rose$overall["Accuracy"]
+sensitivity_rose <- cm_rose$byClass["Sensitivity"]
+specificity_rose <- cm_rose$byClass["Specificity"]
+```
+
+### Economic Evaluation of ROSE
+
+```{r}
+cm_rose$table
+
+TP_rose  <- cm_rose$table["yes", "yes"]
+TN_rose <- cm_rose$table["no", "no"]
+FP_rose <- cm_rose$table["yes", "no"]
+FN_rose <- cm_rose$table["no", "yes"]
+
+```
+
+```{r}
+contactos_realizados_rose <- TP_rose + FP_rose # todos lso casos predichos como "yes"
+Resultado_rose <- ingreso_venta * TP_rose - costo_contacto * contactos_realizados_rose
+
+cat("Total Profit with ROSE = $", Resultado_rose, "\n", "Contacts made =", contactos_realizados_rose, "\n", "TP (successful sales) =", TP_rose, "\n")
+```
+```{r echo= FALSE}
+library(knitr)
+
+result_rose <- data.frame(
+  Modelo = "ROSE",
+  Ganancia_Total = Resultado_rose,
+  Contactos_Realizados = contactos_realizados_rose,
+  TP = TP_rose
+)
+
+kable(result_rose, digits = 0, caption = "ROSE Summary")
+```
+
+
+## E - Decision Trees with Hybrid Balancing
+
+Hybrid balancing combines:
+
+* Downsampling of the majority class to reduce imbalance.
+
+* ROSE to generate synthetic examples and restore balance.
+
+```{r}
+set.seed(123)
+
+tab    <- table(bank_train$deposit)
+n_no   <- tab["no"]
+n_yes  <- tab["yes"]
+target <- floor((n_no + n_yes) / 2)     
+
+# Step 1: Downsample to target
+N_under   <- target + n_yes             
+
+data_under <- ovun.sample(
+  deposit ~ ., data = bank_train,
+  method = "under",
+  N      = N_under,
+  seed   = 123
+)$data
+
+# Step 2: ROSE generation to 2 * target
+N_final <- 2 * target
+p_yes   <- 0.5
+
+bank_train_h <- ROSE(
+  deposit ~ ., data = data_under,
+  N = N_final, p = p_yes,
+  seed = 123
+)$data
+
+table(bank_train_h$deposit)
+```
+```{r}
+# Train on hybrid data
+arbol_h <- rpart(formula = deposit ~ ., method = "class", data = bank_train_h)
+
+# Predictions
+pred_test_h <- predict(arbol_h, newdata = bank_test, type = "prob")
+pred_test_classes_h <- ifelse(pred_test_h[, "yes"] > 0.5, "yes", "no")
+pred_test_classes_h <- factor(pred_test_classes_h, levels = levels(bank_test$deposit))
+
+# Confusion Matrix
+cm_h <- confusionMatrix(pred_test_classes_h, bank_test$deposit, positive = "yes")
+cm_h
+
+# Metrics
+acc_h <- cm_h$overall["Accuracy"]
+sensitivity_h <- cm_h$byClass["Sensitivity"]
+specificity_h <- cm_h$byClass["Specificity"]
+```
+
+  ### Economic Evaluation of the Hybrid Model
+
+
+```{r}
+cm_h$table
+
+TP_h  <- cm_h$table["yes", "yes"]
+TN_h <- cm_h$table["no", "no"]
+FP_h <- cm_h$table["yes", "no"]
+FN_h <- cm_h$table["no", "yes"]
+
+```
+
+```{r}
+contactos_realizados_h <- TP_h + FP_h # todos lso casos predichos como "yes"
+Resultado_h <- ingreso_venta * TP_h - costo_contacto * contactos_realizados_h
+
+cat("Total Profit with Hybrid = $", Resultado_h, "\n", "Contacts made =", contactos_realizados_h, "\n", "TP (successful sales) =", TP_h, "\n")
+
+```
+```{r echo= FALSE}
+library(knitr)
+
+result_h <- data.frame(
+  Modelo = "Hybrid",
+  Ganancia_Total = Resultado_h,
+  Contactos_Realizados = contactos_realizados_h,
+  TP = TP_h
+)
+
+kable(result_h, digits = 0, caption = "Hybrid Summary")
+
+
+```
+
+## F - Decision Trees WITHOUT Class Balancing but with Hyperparameter Optimization
+
+The key hyperparameters typically used to control the structure of a decision tree include:
+
+* **minsplit**: The minimum number of observations required to attempt a split at a node.
+
+* **maxdepth**: The maximum depth allowed for the tree.
+
+* **minbucket**: The minimum number of observations that must be contained in any terminal (leaf) node.
+
+* **cp (complexity parameter)**: Used to control tree complexity via pruning, helping to reduce overfitting and improve generalization.
+
+It is important to carefully tune the values of minsplit, minbucket, cp, and maxdepth to allow the algorithm to effectively capture patterns associated with the minority class. Lower values of minsplit and cp can lead to more granular splits, which may help identify subtle patterns relevant to the minority class. However, caution must be taken to avoid overfitting.
+
+
+```{r}
+set.seed(42)
+
+# Define training control with cross-validation
+train_control <- trainControl(method = "cv", number = 5)  # 5-fold cross-validation
+
+# Define the grid of hyperparameters to test
+grid <- expand.grid(
+  cp = seq(0.001, 0.05, by = 0.005)
+)
+
+# Train the model with hyperparameter tuning for cp
+arbol_hp <- train(
+  deposit ~ ., data = bank_train,
+  method = "rpart",
+  trControl = train_control,
+  tuneGrid = grid
+)
+
+# Extract the optimal cp value
+mejor_cp <- arbol_hp$bestTune
+mejor_cp
+```
+
+```{r}
+# Generate predictions
+pred_test_hp <- predict(arbol_hp, newdata = bank_test, type = "prob")
+pred_test_classes_hp <- ifelse(pred_test_hp[, "yes"] > 0.5, "yes", "no")
+pred_test_classes_hp <- factor(pred_test_classes_hp, levels = levels(bank_test$deposit))
+
+# Confusion Matrix
+cm_hp <- confusionMatrix(pred_test_classes_hp, bank_test$deposit, positive = "yes")
+cm_hp
+
+# Metrics
+acc_hp <- cm_hp$overall["Accuracy"]
+sensitivity_hp <- cm_hp$byClass["Sensitivity"]
+specificity_hp <- cm_hp$byClass["Specificity"]
+```
+
+
+### Profit Evaluation of the Hyperparameter-Tuned Model
+
+
+```{r}
+cm_hp$table
+
+TP_hp <- cm_hp$table["yes", "yes"]
+TN_hp <- cm_hp$table["no", "no"]
+FP_hp <- cm_hp$table["yes", "no"]
+FN_hp <- cm_hp$table["no", "yes"]
+
+```
+
+```{r}
+contactos_realizados_hp <- TP_hp + FP_hp # all cases predicted as "yes"
+Resultado_hp <- ingreso_venta * TP_hp - costo_contacto * contactos_realizados_hp
+
+cat("Total Profit with Hyperparameters = $", Resultado_hp, "\n", "Contacts Made =", contactos_realizados_hp, "\n", "TP (Successful Sales) =", TP_hp, "\n")
+
+```
+```{r echo= FALSE}
+library(knitr)
+
+result_hp <- data.frame(
+  Modelo = "Hiperparametros",
+  Ganancia_Total = Resultado_hp,
+  Contactos_Realizados = contactos_realizados_hp,
+  TP = TP_hp
+)
+
+kable(result_hp, digits = 0, caption = "Hiperparámetros")
+```
+
+
+
+
+
+## Results Comparison
+
+### Model Comparison: Metrics and Economic Evaluation
+
+* **Accuracy**:  Indicates the proportion of correct predictions made by the model.
+* **Sensitivity**: (also called True Positive Rate): Measures the model's ability to correctly identify positive instances (i.e., actual subscribers).
+* **Specificity**: (True Negative Rate): Assesses how well the model identifies actual negative cases.
+
+```{r}
+library(knitr)
+
+resultados <- data.frame(Balanceo = c("No Balancing", "UpSampling", "DownSampling", "ROSE", "Hybrid", "Hyperparameters"),
+                         Accuracy = c(acc, acc_up,acc_down, acc_rose, acc_h, acc_hp),
+                         Sensitivity = c(sensitivity, sensitivity_up, sensitivity_down, sensitivity_rose, sensitivity_h, sensitivity_hp),
+                         Specificity = c(specificity , specificity_up , specificity_down, specificity_rose, specificity_h, specificity_hp),
+                          Contactos_Realizados = c(contactos_realizados, contactos_realizados_upsampled, contactos_realizados_downsampled, contactos_realizados_rose, contactos_realizados_h, contactos_realizados_hp),
+                         TP = c(TP, TP_upsampled, TP_downsampled, TP_rose, TP_h, TP_hp),
+                         Ganancia_Total = c(Resultado, Resultado_upsampled, Resultado_downsampled, Resultado_rose, Resultado_h, Resultado_hp))
+
+# Sort by Total_Profit (descending)
+resultados_ordenado <- resultados %>%
+  arrange(desc(Ganancia_Total))
+
+kable(resultados_ordenado, digits = 4, caption = "Profit Comparison Across All Models")
+```
+
+```{r message= FALSE}
+library(ggplot2)
+library(plotly)
+
+resultados_ordenado$Balanceo <- factor(resultados_ordenado$Balanceo, levels = resultados_ordenado$Balanceo)
+
+bar <- ggplot(resultados_ordenado, aes(x = Balanceo, y = Ganancia_Total)) +
+  geom_col(fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Total Profit by Sampling Technique",
+       y = "Profit ($)", x = "Balancing Method") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(bar)
+```
+
+### Conclusions
+
+* **Unbalanced Model**: Although it achieves high overall accuracy, it fails to effectively identify customers who would subscribe to a term deposit. Consequently, it lacks business utility for targeting potential clients.
+
+* **Model with Hyperparameter Optimization**: While it improves specificity, it still suffers from low sensitivity and produces minimal profit. It is not a viable option for either conversion or profitability.
+
+* **ROSE**: Provides a strong balance between precision and recall, achieves solid profitability, and avoids unnecessary contacts. This makes it one of the most effective approaches.
+
+* **Upsampling**: Capable of identifying a large number of potential subscribers but leads to a higher rate of false positives. While acceptable, it is less efficient than ROSE.
+
+* **Downsampling**: Comparable or even slightly more profitable than ROSE, though it involves slightly more outreach. It is a strong contender when contact cost is not a primary concern.
+
+* **Hybrid Method**: Does not present any significant advantage over ROSE or Downsampling. Its performance does not justify its additional complexity.
+
+In summary, the ROSE method appears to be the most well-balanced and profitable strategy. However, if the goal is to maximize profit with minimal outreach, Downsampling also emerges as a strong alternative.
+
+Relying solely on an unbalanced model or hyperparameter tuning without addressing class imbalance may produce misleading results. High accuracy alone is not sufficient—these models fail at achieving the core business objective of effectively identifying new clients.
